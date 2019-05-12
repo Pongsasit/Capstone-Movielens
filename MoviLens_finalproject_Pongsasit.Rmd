@@ -1,0 +1,259 @@
+---
+title: "MoviLens_T-Pongsasit"
+author: "Pongsasit Thongpramoon"
+date: "2019年5月13日"
+output: pdf_document
+---
+#1.Introduction
+#1.1 Introduction
+ For this project, I created a movie recommendation system using the MovieLens dataset. The version of movielens included in the dslabs package is just a small subset of a much larger dataset with millions of ratings. 
+I used the 10M version of the MovieLens dataset, collected by GroupLens Research (https://grouplens.org/datasets/movielens/10m/). 
+The target of this project is to train a machine learning algorithm using the inputs of a provided subset to predict movie ratings in the provided validation set.
+
+#1.2 Overview
+##1.2.1 Overview
+ This project is related to the MovieLens Project of the HervardX: PH125.9x Data Science: Capstone course. The given dataset will be prepared and setup. An exploratory data analysis is carried out in order to develop a machine learning algorithm that could predict movie ratings until a ﬁnal model.
+
+##1.2.2 Download and Build the dataset.
+
+```{r, echo = TRUE, message = FALSE, warning = FALSE, eval = TRUE}
+###################################
+# Create edx set and validation set
+###################################
+
+# Note: this process could take a couple of minutes
+
+if(!require(tidyverse)) install.packages("tidyverse", repos = "http://cran.us.r-project.org")
+if(!require(caret)) install.packages("caret", repos = "http://cran.us.r-project.org")
+
+# MovieLens 10M dataset:
+# https://grouplens.org/datasets/movielens/10m/
+# http://files.grouplens.org/datasets/movielens/ml-10m.zip
+
+dl <- tempfile()
+download.file("http://files.grouplens.org/datasets/movielens/ml-10m.zip", dl)
+
+ratings <- read.table(text = gsub("::", "\t", readLines(unzip(dl, "ml-10M100K/ratings.dat"))),
+                      col.names = c("userId", "movieId", "rating", "timestamp"))
+
+movies <- str_split_fixed(readLines(unzip(dl, "ml-10M100K/movies.dat")), "\\::", 3)
+colnames(movies) <- c("movieId", "title", "genres")
+movies <- as.data.frame(movies) %>% mutate(movieId = as.numeric(levels(movieId))[movieId],
+                                           title = as.character(title),
+                                           genres = as.character(genres))
+movielens <- left_join(ratings, movies, by = "movieId")
+```
+
+Split the dataset into 2 subsets, “edX” is train set and “validation” is test set.
+```{r, echo = TRUE, message = FALSE, warning = FALSE, eval = TRUE}
+# Validation set will be 10% of MovieLens data
+set.seed(1)
+test_index <- createDataPartition(y = movielens$rating, times = 1, p = 0.1, list = FALSE)
+edx <- movielens[-test_index,]
+temp <- movielens[test_index,]
+
+# Make sure userId and movieId in validation set are also in edx set
+validation <- temp %>% 
+     semi_join(edx, by = "movieId") %>%
+     semi_join(edx, by = "userId")
+
+# Add rows removed from validation set back into edx set
+removed <- anti_join(temp, validation)
+edx <- rbind(edx, removed)
+
+rm(dl, ratings, movies, test_index, temp, movielens, removed)
+```
+
+I trained my model only on “edX”, “validation” set will be used to test the algorithm.
+
+##1.2.3	Know Dataset
+At first I use head function to see overall data in this dataset.  
+```{r head, echo = FALSE}
+head(edx) %>% 
+  print.data.frame
+```
+
+Then find the dimension of edX.
+```{r dim, echo = FALSE}
+dim(edx)
+```
+
+
+Number of movie rating in each genres in edx dataset.
+
+```{r, echo = FALSE}
+#Show the number of movie rating in each genres in edx dataset
+genre<-edx %>% separate_rows(genres, sep = "\\|") %>% group_by(genres) %>% summarize(count = n()) %>% arrange(desc(count))
+head(genre)
+```
+
+Rank the movies by movie ratings.
+```{r, echo = FALSE}
+#Rank the movies by movie ratings
+rank <- edx %>% group_by(movieId, title) %>% summarize(count =n()) %>% arrange(desc(count))
+head(rank)
+```
+
+Find top five of the rating. 
+```{r, echo = FALSE}
+#top five rating
+edx %>% group_by(rating) %>% summarize(count = n()) %>% top_n(5) %>% arrange(desc(count))
+```
+
+And show that half stars rating is less than whole star rating. As below.
+```{r, echo = FALSE}
+edx %>% group_by(rating) %>% summarize(count = n())
+```
+
+So now we know about the basic info of this edx dataset. Then find more informative data in the next section.
+
+##1.3 Target of this project
+$$ RMSE = \sqrt{\frac{1}{N}\displaystyle\sum_{u,i} (\hat{y}_{u,i}-y_{u,i})^{2}} $$
+
+
+Above is RMSE (Root Mean Square Error) is the mesure method for our 3 models that will develop. To make a good predicter RMSE value should be as low as could be.
+
+#2.Analysis
+##2.1Data analysis
+At first we look at the distribution of data by movieId. The relation between number of rating and numbers of movie has shown below :
+```{r RMSE_function1, echo = FALSE}
+edx %>% count(movieId) %>% 
+  ggplot(aes(n)) + geom_histogram(fill = "black", color = "grey", bins = 30) +
+  scale_x_log10() + xlab("Number of ratings") + ylab("Number of movies") + 
+  ggtitle("Number of rating by movies")
+```
+And the distribution of data by UserId. The relation between number of rating and numbers of movie has shown below :
+```{r RMSE_function1, echo = FALSE}
+edx %>% count(userId) %>% 
+  ggplot(aes(n)) + geom_histogram(fill = "black", color = "grey", bins = 30) +
+  scale_x_log10() + xlab("Number of rating") + ylab("Number of users") + 
+  ggtitle("Number of rating by users")
+```
+And the mean of the rating can visualize as the graph below.
+```{r RMSE_function1, echo = FALSE}
+edx %>% group_by(userId) %>% summarize(b_u = mean(rating)) %>% 
+  ggplot(aes(b_u)) + geom_histogram(fill = "black", color = "grey", bins = 30) +
+  xlab("Mean rating") + ylab("Number of users") + 
+  ggtitle("Mean movie rating by users")
+```
+
+##2.2Modelling
+
+Root mean Square Error, or RMSE is used to measure the differences between predicted values(y ̂) as predicted rating of movie(i) by user(u) and observed values(y). If this number is larger than 1, it means our typical error is larger than 1 rating star. Which is not good. Which can write in code as below.
+$$ RMSE = \sqrt{\frac{1}{N}\displaystyle\sum_{u,i} (\hat{y}_{u,i}-y_{u,i})^{2}} $$
+
+```{r RMSE_function1, echo = FALSE}
+RMSE <- function(predicted_ratings, true_ratings){
+  sqrt(mean((predicted_ratings - true_ratings)^2))
+}
+```
+
+##2.2.1 Average movie rating model: 
+The simplest model that assumes the same rating for all movies and users with all the differences explained by random variation would look like this:
+$$ Y_{u,i} =\mu + \epsilon_{u,i}$$
+
+with $\epsilon_{u,i}$ independent error sample from the same distribution centered at 0 and $\mu$ the “true” rating for all movies. This very simple model makes the assumption that all differences in movie ratings are explained by random variation alone. We know that the estimate that minimize the RMSE is the least square estimate of $\mu$ , in this case, is the average of all ratings. Below is the code:
+```{r, echo = TRUE}
+#mean of all rating
+mu <- mean(edx$rating)
+mu
+```
+
+```{r naive_rmse, echo = TRUE}
+#If we predict all unknown ratings with mu we obtain the following RMSE:
+naive_rmse <- RMSE(validation$rating,mu)
+naive_rmse
+```
+
+```{r rmse_results1, echo = TRUE}
+#make a result table for every method:
+rmse_results <- data_frame(method = "Just the average", RMSE = naive_rmse)
+rmse_results
+```
+As above the result of this model is the average of rating equal 3.512 … and RSME is about 1.061 that is higer than 1. Which is not good.
+
+##2.2.2 Movie effects model: 
+Augment the previous model by adding them $$b_{i}$$ (bias)to represent average ranking for movie (i)
+$$Y_{u,i} = \mu +b_{i}+ \epsilon_{u,i}$$
+And the histogram is left skewed as shown below.
+```{r Number_of_movies_with_the computed_b_i, echo = TRUE, fig.height=3, fig.width=4}
+movie_avgs <- edx %>%
+  group_by(movieId) %>%
+  summarize(b_i = mean(rating - mu))
+movie_avgs %>% qplot(b_i, geom ="histogram", bins = 10, data = ., color = I("black"),
+ylab = "Number of movies", main = "Number of movies with the computed b_i")
+```
+
+By the graph above, can see that these estimates vary substantially. So check the prediction result as the code below.
+```{r predicted_ratings, echo = TRUE}
+predicted_ratings <- mu + validation %>% 
+  left_join(movie_avgs, by='movieId') %>%
+  pull(b_i)
+
+model_1_rmse <- RMSE(predicted_ratings, validation$rating)
+rmse_results <- bind_rows(rmse_results,
+                          data_frame(method="Movie Effect Model",  
+                                     RMSE = model_1_rmse))
+rmse_results
+```
+
+##2.2.3 Movie and user effects model: 
+compute the average rating for users. 
+
+```{r, echo = TRUE}
+#user effects model
+edx %>% 
+  group_by(userId) %>% 
+  summarize(b_u = mean(rating)) %>%
+  ggplot(aes(b_u)) + 
+  geom_histogram(bins = 30, color = "black")
+```
+Then notice that there is substantial variability across users. Imply to model could be:
+ $$Y_{u,i} = \mu +b_{i}+b_{u}+\epsilon_{u,i}$$
+
+When $b_{u}$ is a user-specific effect and $b_{i}$ is movie-specific effect. We compute an approximation by compute $\mu$ and $b_{i}$, and estimating  $b_{u}$, as the average of $$Y_{u, i} - \mu - b_{i}$$ To create this model, I used the code below.
+
+```{r user_avgs, echo = TRUE}
+user_avgs <- edx %>% 
+  left_join(movie_avgs, by='movieId') %>%
+  group_by(userId) %>%
+  summarize(b_u = mean(rating - mu - b_i))
+```
+
+```{r model_2_rmse, echo = TRUE}
+#construct predictors and see how much the RMSE
+
+predicted_ratings <- validation %>% 
+  left_join(movie_avgs, by='movieId') %>%
+  left_join(user_avgs, by='userId') %>%
+  mutate(pred = mu + b_i + b_u) %>%
+  pull(pred)
+
+
+model_2_rmse <- RMSE(predicted_ratings, validation$rating)
+rmse_results <- bind_rows(rmse_results,
+                          data_frame(method="Movie and User Effects Model",  
+                                     RMSE = model_2_rmse))
+rmse_results
+```
+
+The RSME is less than the previous model.
+
+##3.Result
+The RMSE values of the previous model shown below:
+```{r rmse_results3, echo = FALSE}
+rmse_results
+```
+The lowest RMSE values is 0.8653488, when used Movie and user effects model.
+
+##4.	Conclusion
+Finally, I can made the machine learning model that can achieve to goal (RMSE <= 0.87750). This is very good assignment that make me use many skills that I learned before. For the next project I will try my best like this (or better than this) project. And this project inspires me the “I can do” attitude.
+
+##5.	Environment & Reference
+##5.1 Environment
+```{r}
+print("Operating System:")
+version
+```
+##5.2 Reference
+https://rafalab.github.io/dsbook/large-datasets.html#netflix-loss-function
